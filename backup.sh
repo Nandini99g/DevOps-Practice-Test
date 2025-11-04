@@ -1,231 +1,114 @@
-#!/bin/bash
-# =====================================================
-# Automated Backup System
-# Author: Nandini Gadambli
-# Description:
-#   Creates compressed backups with checksum verification,
-#   automatic cleanup (daily, weekly, monthly),
-#   and restore functionality.
-# =====================================================
-
-# --- Paths & Config ---
-CONFIG_FILE="./backup.config"
-LOG_FILE="./logs/backup.log"
-LOCK_FILE="/tmp/backup.lock"
-DATE_NOW=$(date '+%Y-%m-%d %H:%M:%S')
-TIMESTAMP=$(date +%Y-%m-%d-%H%M)
-
-# --- Check for config file ---
-if [ ! -f "$CONFIG_FILE" ]; then
-  echo "[$DATE_NOW] ERROR: Configuration file not found!" | tee -a "$LOG_FILE"
-  exit 1
-fi
-
-# --- Load configuration ---
-source "$CONFIG_FILE"
-
-# --- Helper: Logging ---
+#!/usr/bin/env bash
+# backup.sh — automated backup with daily/weekly/monthly organization
+set -euo pipefail
+ 
+# === PATHS ===
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_FILE="$SCRIPT_DIR/backup.log"
+BACKUP_DIR="$SCRIPT_DIR/backups"
+RESTORE_DIR="$SCRIPT_DIR/restore"
+DAILY_DIR="$BACKUP_DIR/daily"
+WEEKLY_DIR="$BACKUP_DIR/weekly"
+MONTHLY_DIR="$BACKUP_DIR/monthly"
+ 
+# === CONFIG ===
+DAILY_KEEP=7
+WEEKLY_KEEP=4
+MONTHLY_KEEP=3
+ 
+# === PREPARE DIRECTORIES ===
+mkdir -p "$DAILY_DIR" "$WEEKLY_DIR" "$MONTHLY_DIR" "$RESTORE_DIR"
+ 
+# === LOGGING FUNCTION ===
 log() {
-  local LEVEL=$1
-  local MSG=$2
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $LEVEL: $MSG" | tee -a "$LOG_FILE"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
-
-# --- Helper: Exit cleanly ---
-cleanup_exit() {
-  rm -f "$LOCK_FILE"
-  exit $1
-}
-
-# --- Prevent multiple runs ---
-if [ -f "$LOCK_FILE" ]; then
-  log "ERROR" "Another backup process is already running!"
+ 
+# === ARGUMENT PARSING ===
+DRYRUN=false
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRYRUN=true
+  shift
+fi
+ 
+if [[ "${1:-}" == "--list" ]]; then
+  echo "=== Available backups ==="
+  tree -h "$BACKUP_DIR" || echo "No backups found."
+  exit 0
+fi
+ 
+if [[ "${1:-}" == "--restore" ]]; then
+  BACKUP_FILE="$2"
+  shift 2
+  RESTORE_TARGET="${2:-$RESTORE_DIR}"
+  log "Restoring $BACKUP_FILE to $RESTORE_TARGET ..."
+  mkdir -p "$RESTORE_TARGET"
+  if [[ "$DRYRUN" == "true" ]]; then
+    log "[DRYRUN] Would extract $BACKUP_FILE into $RESTORE_TARGET"
+  else
+    tar -xzf "$BACKUP_FILE" -C "$RESTORE_TARGET"
+    log "Restore completed!"
+  fi
+  exit 0
+fi
+ 
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 [--dry-run|--list|--restore <file> --to <folder>] <source_dir>"
   exit 1
 fi
-touch "$LOCK_FILE"
-
-# --- Read mode and arguments ---
-MODE="backup"
-DRY_RUN=false
-
-if [ "$1" == "--dry-run" ]; then
-  DRY_RUN=true
-  SRC_DIR=$2
-elif [ "$1" == "--restore" ]; then
-  MODE="restore"
-  BACKUP_FILE=$2
-  if [ "$3" == "--to" ]; then
-    RESTORE_DIR=$4
-  else
-    log "ERROR" "Usage: ./backup.sh --restore <backup-file> --to <destination-folder>"
-    cleanup_exit 1
-  fi
-else
-  SRC_DIR=$1
+ 
+SOURCE="$1"
+if [[ ! -d "$SOURCE" ]]; then
+  echo "Error: Source directory not found: $SOURCE"
+  exit 1
 fi
-
-# --- Validate backup destination ---
-mkdir -p "$BACKUP_DESTINATION" "./logs"
-
-# =====================================================
-# Function: Create Backup
-# =====================================================
-create_backup() {
-  local SRC="$1"
-  local BACKUP_FILE="${BACKUP_DESTINATION}/backup-${TIMESTAMP}.tar.gz"
-  local EXCLUDES=()
-
-  # Validate source
-  if [ ! -d "$SRC" ]; then
-    log "ERROR" "Source directory not found: $SRC"
-    cleanup_exit 1
-  fi
-
-  IFS=',' read -ra PATTERNS <<< "$EXCLUDE_PATTERNS"
-  for pattern in "${PATTERNS[@]}"; do
-    EXCLUDES+=("--exclude=${pattern}")
-  done
-
-  if [ "$DRY_RUN" = true ]; then
-    log "DRY-RUN" "Would create backup of $SRC at $BACKUP_FILE"
-    cleanup_exit 0
-  fi
-
-  log "INFO" "Starting backup for $SRC..."
-  tar -czf "$BACKUP_FILE" "${EXCLUDES[@]}" "$SRC" 2>>"$LOG_FILE"
-  if [ $? -ne 0 ]; then
-    log "ERROR" "Backup creation failed!"
-    cleanup_exit 1
-  fi
-
-  sha256sum "$BACKUP_FILE" > "${BACKUP_FILE}.sha256"
-  if [ $? -eq 0 ]; then
-    log "SUCCESS" "Backup created: $(basename $BACKUP_FILE)"
-  else
-    log "ERROR" "Failed to create checksum!"
-  fi
-
-  verify_backup "$BACKUP_FILE"
-}
-
-# =====================================================
-# Function: Verify Backup
-# =====================================================
-verify_backup() {
-  local FILE=$1
-  log "INFO" "Verifying checksum for $(basename $FILE)..."
-  sha256sum -c "${FILE}.sha256" >> "$LOG_FILE" 2>&1
-
-  if [ $? -eq 0 ]; then
-    log "SUCCESS" "Checksum verified successfully."
-  else
-    log "ERROR" "Checksum verification failed for $FILE!"
-  fi
-
-  # Optional test extraction
-  mkdir -p ./_test_extract
-  tar -tzf "$FILE" >/dev/null 2>>"$LOG_FILE"
-  if [ $? -eq 0 ]; then
-    log "INFO" "Archive integrity test passed."
-  else
-    log "ERROR" "Archive integrity test failed!"
-  fi
-  rm -rf ./_test_extract
-}
-
-# =====================================================
-# Function: Restore Backup
-# =====================================================
-restore_backup() {
-  local BACKUP_FILE=$1
-  local DEST_DIR=$2
-
-  if [ ! -f "$BACKUP_FILE" ]; then
-    log "ERROR" "Backup file not found: $BACKUP_FILE"
-    cleanup_exit 1
-  fi
-
-  mkdir -p "$DEST_DIR"
-  log "INFO" "Restoring $BACKUP_FILE to $DEST_DIR..."
-  tar -xzf "$BACKUP_FILE" -C "$DEST_DIR" >> "$LOG_FILE" 2>&1
-  if [ $? -eq 0 ]; then
-    log "SUCCESS" "Backup restored to $DEST_DIR"
-  else
-    log "ERROR" "Restore failed!"
-  fi
-}
-
-# =====================================================
-# Function: Cleanup Old Backups
-# =====================================================
-cleanup_old_backups() {
-  log "INFO" "Starting cleanup of old backups..."
-
-  # --- Keep last N daily backups ---
-  local all_backups=($(ls -t ${BACKUP_DESTINATION}/backup-*.tar.gz 2>/dev/null))
-  local total_backups=${#all_backups[@]}
-
-  if [ "$total_backups" -gt "$DAILY_KEEP" ]; then
-    for ((i=DAILY_KEEP; i<total_backups; i++)); do
-      old_file="${all_backups[$i]}"
-      log "INFO" "Deleting old backup: $old_file"
-      rm -f "$old_file" "$old_file.sha256"
+ 
+# === CREATE BACKUP ===
+TIMESTAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
+BACKUP_NAME="backup-${TIMESTAMP}.tar.gz"
+DAILY_PATH="$DAILY_DIR/$BACKUP_NAME"
+ 
+log "Starting backup for $SOURCE ..."
+if [[ "$DRYRUN" == "true" ]]; then
+  log "[DRYRUN] Would create: $DAILY_PATH"
+else
+  tar -czf "$DAILY_PATH" -C "$(dirname "$SOURCE")" "$(basename "$SOURCE")"
+  log "Backup created: $DAILY_PATH"
+fi
+ 
+# === ORGANIZE BACKUPS ===
+DAY_OF_WEEK=$(date +%u)  # 1=Monday, 7=Sunday
+DAY_OF_MONTH=$(date +%d)
+ 
+if [[ "$DAY_OF_WEEK" == "7" ]]; then
+  WEEKLY_PATH="$WEEKLY_DIR/backup-weekly-${TIMESTAMP}.tar.gz"
+  log "It's Sunday → marking as weekly backup."
+  [[ "$DRYRUN" == "true" ]] && log "[DRYRUN] Would copy to $WEEKLY_PATH" || cp "$DAILY_PATH" "$WEEKLY_PATH"
+fi
+ 
+if [[ "$DAY_OF_MONTH" == "01" ]]; then
+  MONTHLY_PATH="$MONTHLY_DIR/backup-monthly-${TIMESTAMP}.tar.gz"
+  log "It's the first of the month → marking as monthly backup."
+  [[ "$DRYRUN" == "true" ]] && log "[DRYRUN] Would copy to $MONTHLY_PATH" || cp "$DAILY_PATH" "$MONTHLY_PATH"
+fi
+ 
+# === CLEANUP OLD BACKUPS ===
+cleanup_old() {
+  local dir="$1"
+  local keep="$2"
+  local count
+  count=$(ls -1t "$dir"/*.tar.gz 2>/dev/null | wc -l || true)
+  if (( count > keep )); then
+    local delete_count=$((count - keep))
+    log "Cleaning up $delete_count old backups in $dir ..."
+    ls -1t "$dir"/*.tar.gz | tail -n "$delete_count" | while read -r oldfile; do
+      [[ "$DRYRUN" == "true" ]] && log "[DRYRUN] Would delete $oldfile" || rm -f "$oldfile"
     done
   fi
-
-  # --- Keep weekly backups (1 per week for last N weeks) ---
-  find "$BACKUP_DESTINATION" -name "backup-*.tar.gz" -mtime +7 -type f | while read f; do
-    file_date=$(basename "$f" | cut -d'-' -f2-4)
-    week_num=$(date -d "$file_date" +%V 2>/dev/null)
-    current_week=$(date +%V)
-    if [ "$((current_week - week_num))" -gt "$WEEKLY_KEEP" ]; then
-      log "INFO" "Deleting old weekly backup: $f"
-      rm -f "$f" "$f.sha256"
-    fi
-  done
-
-  # --- Keep monthly backups (1 per month for last N months) ---
-  find "$BACKUP_DESTINATION" -name "backup-*.tar.gz" -mtime +30 -type f | while read f; do
-    file_month=$(basename "$f" | cut -d'-' -f2)
-    current_month=$(date +%m)
-    if [ "$((10#$current_month - 10#$file_month))" -gt "$MONTHLY_KEEP" ]; then
-      log "INFO" "Deleting old monthly backup: $f"
-      rm -f "$f" "$f.sha256"
-    fi
-  done
-
-  log "INFO" "Cleanup completed."
 }
-
-# =====================================================
-# Function: Space Check (optional safety)
-# =====================================================
-check_disk_space() {
-  local avail=$(df -k --output=avail "$BACKUP_DESTINATION" | tail -n1)
-  if [ "$avail" -lt 100000 ]; then
-    log "ERROR" "Not enough disk space for backup!"
-    cleanup_exit 1
-  fi
-}
-
-# =====================================================
-# MAIN EXECUTION
-# =====================================================
-if [ "$MODE" == "backup" ]; then
-  if [ -z "$SRC_DIR" ]; then
-    echo "Usage: ./backup.sh [--dry-run] <source-folder>"
-    cleanup_exit 1
-  fi
-
-  log "INFO" "Backup job started at $DATE_NOW"
-  check_disk_space
-  create_backup "$SRC_DIR"
-  cleanup_old_backups
-  log "INFO" "Backup job completed successfully."
-
-elif [ "$MODE" == "restore" ]; then
-  restore_backup "$BACKUP_FILE" "$RESTORE_DIR"
-fi
-
-# --- Cleanup and Exit ---
-cleanup_exit 0
+ 
+cleanup_old "$DAILY_DIR" "$DAILY_KEEP"
+cleanup_old "$WEEKLY_DIR" "$WEEKLY_KEEP"
+cleanup_old "$MONTHLY_DIR" "$MONTHLY_KEEP"
+ 
+log "Backup finished successfully."
