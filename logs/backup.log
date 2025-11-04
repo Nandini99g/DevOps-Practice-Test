@@ -1,0 +1,20 @@
+[2025-11-03 14:39:37] INFO: Backup job started at 2025-11-03 14:39:37
+[2025-11-03 14:39:37] INFO: Starting backup for ./test_data...
+[2025-11-03 14:39:37] SUCCESS: Backup created: backup-2025-11-03-1439.tar.gz
+[2025-11-03 14:39:37] INFO: Verifying checksum for backup-2025-11-03-1439.tar.gz...
+./backups/backup-2025-11-03-1439.tar.gz: OK
+[2025-11-03 14:39:37] SUCCESS: Checksum verified successfully.
+[2025-11-03 14:39:37] INFO: Archive integrity test passed.
+[2025-11-03 14:39:37] INFO: Starting cleanup of old backups...
+[2025-11-03 14:39:37] INFO: Cleanup completed.
+[2025-11-03 14:39:37] INFO: Backup job completed successfully.
+[2025-11-03 16:30:25] INFO: Backup job started at 2025-11-03 16:30:25
+[2025-11-03 16:30:25] INFO: Starting backup for ./test_data...
+[2025-11-03 16:30:25] SUCCESS: Backup created: backup-2025-11-03-1630.tar.gz
+[2025-11-03 16:30:25] INFO: Verifying checksum for backup-2025-11-03-1630.tar.gz...
+./backups/backup-2025-11-03-1630.tar.gz: OK
+[2025-11-03 16:30:25] SUCCESS: Checksum verified successfully.
+[2025-11-03 16:30:25] INFO: Archive integrity test passed.
+[2025-11-03 16:30:25] INFO: Starting cleanup of old backups...
+[2025-11-03 16:30:26] INFO: Cleanup completed.
+[2025-11-03 16:30:26] INFO: Backup job completed successfully.
